@@ -111,11 +111,11 @@ function iter<T>(object: IterableOrArrayLike<T>): IIterator<T> {
  *
  * #### Example
  * ```typescript
- * import { each, keys } from '@phosphor/algorithm';
+ * import { each, iterKeys } from '@phosphor/algorithm';
  *
  * let data = { one: 1, two: 2, three: 3 };
  *
- * each(keys(data), key => { console.log(key); }); // 'one', 'two', 'three'
+ * each(iterKeys(data), key => { console.log(key); }); // 'one', 'two', 'three'
  * ```
  */
 export
@@ -136,11 +136,11 @@ function iterKeys<T>(object: { readonly [key: string]: T }): IIterator<string> {
  *
  * #### Example
  * ```typescript
- * import { each, values } from '@phosphor/algorithm';
+ * import { each, iterValues } from '@phosphor/algorithm';
  *
  * let data = { one: 1, two: 2, three: 3 };
  *
- * each(values(data), value => { console.log(value); }); // 1, 2, 3
+ * each(iterValues(data), value => { console.log(value); }); // 1, 2, 3
  * ```
  */
 export
@@ -161,11 +161,11 @@ function iterValues<T>(object: { readonly [key: string]: T }): IIterator<T> {
  *
  * #### Example
  * ```typescript
- * import { each, items } from '@phosphor/algorithm';
+ * import { each, iterItems } from '@phosphor/algorithm';
  *
  * let data = { one: 1, two: 2, three: 3 };
  *
- * each(items(data), value => { console.log(value); }); // ['one', 1], ['two', 2], ['three', 3]
+ * each(iterItems(data), value => { console.log(value); }); // ['one', 1], ['two', 2], ['three', 3]
  * ```
  */
 export

@@ -60,7 +60,7 @@ import {
  * diverging state between peers.
  */
 export
-class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>, IMessageHandler, IDisposable {
+class Datastore<T extends ReadonlyArray<Schema> = ReadonlyArray<Schema>, U extends Datastore.SchemaMap = Datastore.SchemaMapFromUnion<T[number]>> implements IIterable<Table<U[keyof U]>>, IMessageHandler, IDisposable {
 
   /**
    * Create a new datastore.
@@ -71,7 +71,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    *
    * @throws An exception if any of the schema definitions are invalid.
    */
-  static create<T extends Array<Schema>>(options: Datastore.IOptions<T>): Datastore<T> {
+  static create<T extends ReadonlyArray<Schema>, U extends Datastore.SchemaMap = Datastore.SchemaMapFromUnion<T[number]>>(options: Datastore.IOptions<T>): Datastore<T, U> {
     const {schemas} = options;
     // Throws an error for invalid schemas:
     Private.validateSchemas(schemas);
@@ -100,7 +100,11 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
       }));
     }
 
-    return new Datastore(context, tables, options.broadcastHandler);
+    return new Datastore<T, U>(
+      context,
+      tables as BPlusTree<Table<U[keyof U]>>,
+      options.broadcastHandler
+    );
   }
 
   dispose(): void {
@@ -132,7 +136,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    * #### Complexity
    * `O(1)`
    */
-  get changed(): ISignal<Datastore<T>, Datastore.IChangedArgs<T[number]>> {
+  get changed(): ISignal<Datastore<T, U>, Datastore.IChangedArgs<U>> {
     return this._changed;
   }
 
@@ -179,7 +183,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    *
    * @returns An iterator.
    */
-  iter(): IIterator<Table<T[number]>> {
+  iter(): IIterator<Table<U[keyof U]>> {
     return this._tables.iter();
   }
 
@@ -195,7 +199,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    * #### Complexity
    * `O(log32 n)`
    */
-  get<S extends T[number]>(schema: S): Table<S> {
+  get<S extends U[keyof U]>(schema: S): Table<S> {
     const t = this._tables.get(schema.id, Private.recordIdCmp);
     if (t === undefined) {
       throw new Error(`No table found for schema with id: ${schema.id}`);
@@ -239,7 +243,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
     if (this.broadcastHandler && !Private.isPatchEmpty(patch)) {
       MessageLoop.sendMessage(
         this.broadcastHandler,
-        new Datastore.TransactionMessage<T[number]>({
+        new Datastore.TransactionMessage<U>({
           id: transactionId,
           storeId,
           patch,
@@ -260,7 +264,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
     switch (msg.type) {
     // External messages:
     case 'datastore-transaction':
-      const m = msg as Datastore.TransactionMessage<T[number]>;
+      const m = msg as Datastore.TransactionMessage<U>;
       this._applyTransaction(m.transaction);
       break;
 
@@ -341,8 +345,8 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    * @param tables - The tables of the datastore.
    */
   private constructor(
-    context: Datastore.Context<T[number]>,
-    tables: BPlusTree<Table<T[number]>>,
+    context: Datastore.Context<U>,
+    tables: BPlusTree<Table<U[keyof U]>>,
     broadcastHandler?: IMessageHandler,
     transactionIdFactory?: Datastore.TransactionIdFactory
   ) {
@@ -363,7 +367,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    * #### Notes
    * If changes are made, the `changed` signal will be emitted.
    */
-  private _applyTransaction(transaction: Datastore.Transaction<T[number]>, fromQueue=false): void {
+  private _applyTransaction(transaction: Datastore.Transaction<U>, fromQueue=false): void {
     if (!this._transactionQueue.isEmpty && !fromQueue) {
       // We have queued transactions waiting to be applied.
       // As we need to retain causal order of incoming transactions,
@@ -381,7 +385,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
       this._queueTransaction(transaction);
       return;
     }
-    const change: Datastore.MutableChange<T[number]> = {};
+    const change: Datastore.MutableChange<U> = {};
     try {
       each(iterItems(patch), ([schemaId, tablePatch]) => {
         const table = this._tables.get(schemaId, Private.recordIdCmp);
@@ -393,7 +397,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
           this._finalizeTransaction();
           return;
         }
-        change[schemaId] = Table.patch(table, tablePatch);
+        change[schemaId] = Table.patch(table, tablePatch!);
       });
     } finally {
       this._finalizeTransaction();
@@ -415,7 +419,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    * @throws An exception if a transaction is already in progress.
    */
   private _initTransaction(id: string, newVersion: number): void {
-    const context = this._context as Private.MutableContext<T[number]>;
+    const context = this._context as Private.MutableContext;
     if (context.inTransaction) {
       throw new Error(`Already in a transaction: ${this._context.transactionId}`);
     }
@@ -432,7 +436,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    * @throws An exception if no transaction is in progress.
    */
   private _finalizeTransaction(): void {
-    const context = this._context as Private.MutableContext<T[number]>;
+    const context = this._context as Private.MutableContext;
     if (!context.inTransaction) {
       throw new Error('No transaction in progress.');
     }
@@ -444,7 +448,7 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
    *
    * @param transaction - The transaction to queue.
    */
-  private _queueTransaction(transaction: Datastore.Transaction<T[number]>): void {
+  private _queueTransaction(transaction: Datastore.Transaction<U>): void {
     this._transactionQueue.addLast(transaction);
     MessageLoop.postMessage(this, new ConflatableMessage('queued-transaction'));
   }
@@ -482,11 +486,11 @@ class Datastore<T extends Array<Schema>> implements IIterable<Table<T[number]>>,
 
   private _broadcastHandler: IMessageHandler | null;
   private _disposed = false;
-  private _tables: BPlusTree<Table<T[number]>>;
-  private _context: Datastore.Context<T[number]>;
-  private _changed = new Signal<Datastore<T>, Datastore.IChangedArgs<T[number]>>(this);
+  private _tables: BPlusTree<Table<U[keyof U]>>;
+  private _context: Datastore.Context<U>;
+  private _changed = new Signal<Datastore<T, U>, Datastore.IChangedArgs<U>>(this);
   private _transactionIdFactory: Datastore.TransactionIdFactory;
-  private _transactionQueue = new LinkedList<Datastore.Transaction<T[number]>>();
+  private _transactionQueue = new LinkedList<Datastore.Transaction<U>>();
 }
 
 
@@ -499,7 +503,7 @@ namespace Datastore {
    * An options object for initializing a datastore.
    */
   export
-  interface IOptions<T extends Array<Schema>> {
+  interface IOptions<T extends ReadonlyArray<Schema>> {
     /**
      * The unique id of the datastore.
      */
@@ -530,7 +534,7 @@ namespace Datastore {
    * The arguments object for the store `changed` signal.
    */
   export
-  interface IChangedArgs<S extends Schema> {
+  interface IChangedArgs<T extends SchemaMap = SchemaMap> {
     /**
      * Whether the change was generated by transaction, undo, or redo.
      */
@@ -549,46 +553,46 @@ namespace Datastore {
     /**
      * A mapping of schema id to table change set.
      */
-    readonly change: Change<S>;
+    readonly change: Change<T>;
   }
 
   /**
    * A type alias for a store change.
    */
   export
-  type Change<S extends Schema> = {
-    readonly [schemaId: string]: Table.Change<S>;
-  };
+  type Change<T extends SchemaMap = SchemaMap> = Partial<{
+    [K in keyof T]: Table.Change<T[K]>;
+  }>;
 
   /**
    * A type alias for a store patch.
    */
   export
-  type Patch<S extends Schema> = {
-    readonly [schemaId: string]: Table.Patch<S>;
-  };
+  type Patch<T extends SchemaMap = SchemaMap> = Partial<{
+    [K in keyof T]: Table.Patch<T[K]>;
+  }>;
 
   /**
    * @internal
    */
   export
-  type MutableChange<S extends Schema> = {
-    [schemaId: string]: Table.MutableChange<S>;
-  };
+  type MutableChange<T extends SchemaMap = SchemaMap> = Partial<{
+    [K in keyof T]: Table.MutableChange<T[K]>;
+  }>;
 
   /**
    * @internal
    */
   export
-  type MutablePatch<S extends Schema> = {
-    [schemaId: string]: Table.MutablePatch<S>;
-  };
+  type MutablePatch<T extends SchemaMap = SchemaMap> = Partial<{
+    [K in keyof T]: Table.MutablePatch<T[K]>;
+  }>;
 
   /**
    * An object representing a datastore transaction.
    */
   export
-  type Transaction<S extends Schema> = {
+  type Transaction<T extends SchemaMap = SchemaMap> = {
 
     /**
      * The id of the transaction.
@@ -603,7 +607,7 @@ namespace Datastore {
     /**
      * The patch data of the transaction.
      */
-    readonly patch: Patch<S>;
+    readonly patch: Patch<T>;
 
     /**
      * The version of the source datastore.
@@ -615,15 +619,15 @@ namespace Datastore {
    * A message of a datastore transaction.
    */
   export
-  class TransactionMessage<S extends Schema> extends Message {
-    constructor(transaction: Transaction<S>) {
+  class TransactionMessage<T extends SchemaMap = SchemaMap> extends Message {
+    constructor(transaction: Transaction<T>) {
       super('datastore-transaction');
       this.transaction = transaction;
     }
     /**
      * The transaction associated with the change.
      */
-    readonly transaction: Transaction<S>;
+    readonly transaction: Transaction<T>;
 
     readonly type: 'datastore-transaction';
   }
@@ -632,13 +636,44 @@ namespace Datastore {
    * @internal
    */
   export
-  type Context<S extends Schema> = Readonly<Private.MutableContext<S>>;
+  type Context<T extends SchemaMap = SchemaMap> = Readonly<Private.MutableContext<T>>;
 
   /**
    * A factory function for generating a unique transaction id.
    */
   export
   type TransactionIdFactory = (version: number, storeId: number) => string;
+
+
+  // Typing helpers:
+
+  /**
+   * A mapping of schema ids to schemas
+   */
+  export
+  type SchemaMap = {
+    [key: string]: Schema
+  };
+
+  /**
+   * Narrow a union of schemas to a single schema, using a schema id.
+   */
+  export
+  type SchemaWithId<S extends Schema, K extends string> = S['id'] extends K ? S : never;
+
+  /**
+   * Get a schema map typing, from a union type.
+   */
+  export
+  type SchemaMapFromUnion<S extends Schema> = {
+    [K in S['id']]: S extends SchemaWithId<S, K> ? S : never;
+  };
+
+  /**
+   * Get a schema map typing, from an array of schema type.
+   */
+  export
+  type SchemaMapFromArray<T extends ReadonlyArray<Schema>> = SchemaMapFromUnion<T[number]>;
 }
 
 
@@ -677,7 +712,7 @@ namespace Private {
   }
 
   export
-  type MutableContext<S extends Schema> = {
+  type MutableContext<T extends Datastore.SchemaMap = Datastore.SchemaMap> = {
     /**
      * Whether the datastore currently in a transaction.
      */
@@ -701,19 +736,19 @@ namespace Private {
     /**
      * The current change object of the transaction.
      */
-    change: Datastore.MutableChange<S>;
+    change: Datastore.MutableChange<T>;
 
     /**
      * The current patch object of the transaction.
      */
-    patch: Datastore.MutablePatch<S>;
+    patch: Datastore.MutablePatch<T>;
   }
 
   /**
    * Checks if a patch is empty.
    */
   export
-  function isPatchEmpty(patch: Datastore.Patch<Schema>): boolean {
+  function isPatchEmpty(patch: Datastore.Patch): boolean {
     return Object.keys(patch).length === 0;
   }
 
@@ -721,7 +756,7 @@ namespace Private {
    * Checks if a change is empty.
    */
   export
-  function isChangeEmpty(change: Datastore.Change<Schema>): boolean {
+  function isChangeEmpty(change: Datastore.Change): boolean {
     return Object.keys(change).length === 0;
   }
 }

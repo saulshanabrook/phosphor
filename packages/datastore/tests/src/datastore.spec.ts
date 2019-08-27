@@ -10,7 +10,7 @@ import {
 } from 'chai';
 
 import {
-  Datastore, Fields, ListField, RegisterField, TextField, Schema
+  Datastore, Fields, ListField, RegisterField, TextField
 } from '@phosphor/datastore';
 
 import {
@@ -21,11 +21,12 @@ import {
 type CustomMetadata = { id: string };
 
 type TestSchema = {
-  id: string;
+  id: 'test-schema-1';
   fields: {
     content: TextField,
     count: RegisterField<number>,
     enabled: RegisterField<boolean>,
+    visible: RegisterField<boolean>,
     links: ListField<string>,
     metadata: RegisterField<CustomMetadata>
   }
@@ -35,23 +36,24 @@ let schema1: TestSchema = {
   id: 'test-schema-1',
   fields: {
     content: Fields.Text(),
-    count:Fields.Number(),
+    count: Fields.Number(),
     enabled: Fields.Boolean(),
+    visible: Fields.Boolean(),
     links: Fields.List<string>(),
     metadata: Fields.Register<CustomMetadata>({ value: { id: 'identifier' }})
   }
 };
 
-let schema2: TestSchema = {
-  id: 'test-schema-2',
+let schema2 = {
+  id: 'test-schema-2' as const,
   fields: {
-    content: Fields.Text(),
-    count:Fields.Number(),
     enabled: Fields.Boolean(),
-    links: Fields.List<string>(),
-    metadata: Fields.Register<CustomMetadata>({ value: { id: 'identifier' }})
+    count: Fields.Number(),
+    keywords: Fields.List<string>(),
   }
 };
+
+const schemas = [schema1, schema2];
 
 let state = {
   [schema1.id]: [
@@ -59,17 +61,16 @@ let state = {
       content: 'Lorem Ipsum',
       count: 42,
       enabled: true,
+      visible: false,
       links: ['www.example.com'],
       metadata: { id: 'myidentifier' }
     }
   ],
   [schema2.id]: [
     {
-      content: 'Ipsum Lorem',
       count: 33,
       enabled: false,
-      links: ['www.example.com', 'https://github.com/phosphor/phosphorjs'],
-      metadata: null
+      links: ['foo', 'bar'],
     }
   ]
 };
@@ -78,28 +79,27 @@ class LoggingMessageHandler implements IMessageHandler {
   processMessage(msg: Message): void {
     switch(msg.type) {
     case 'datastore-transaction':
-      this.transactions.push((msg as Datastore.TransactionMessage<Schema>).transaction);
+      this.transactions.push((msg as Datastore.TransactionMessage).transaction);
       break;
     default:
       throw Error('Unexpected message');
       break;
     }
   }
-  transactions: Datastore.Transaction<Schema>[] = [];
+  transactions: Datastore.Transaction[] = [];
 }
 
 describe('@phosphor/datastore', () => {
 
   describe('Datastore', () => {
-
-    let datastore: Datastore<[typeof schema1, typeof schema2]>;
+    let datastore: Datastore<typeof schemas>;
     let broadcastHandler: LoggingMessageHandler;
     const DATASTORE_ID = 1234;
     beforeEach(() => {
       broadcastHandler = new LoggingMessageHandler();
       datastore = Datastore.create({
         id: DATASTORE_ID,
-        schemas: [schema1, schema2],
+        schemas,
         broadcastHandler
       });
     });
@@ -135,7 +135,7 @@ describe('@phosphor/datastore', () => {
       it('should restore valid state', () => {
         let datastore = Datastore.create({
           id: 1,
-          schemas: [schema1, schema2],
+          schemas,
           restoreState: JSON.stringify(state)
         });
 
@@ -147,7 +147,7 @@ describe('@phosphor/datastore', () => {
         let partialState = {[schema1.id]: state[schema1.id] };
         let datastore = Datastore.create({
           id: 1,
-          schemas: [schema1, schema2],
+          schemas,
           restoreState: JSON.stringify(partialState)
         });
 
@@ -198,10 +198,15 @@ describe('@phosphor/datastore', () => {
           expect(change.storeId).to.equal(DATASTORE_ID);
           expect(change.change['test-schema-1']).to.not.be.undefined;
           expect(change.change['test-schema-2']).to.be.undefined;
+          // This code id mostly for checking correcting typing
+          // for change events:
+          const data = change.change['test-schema-1']!['my-record']!;
+          expect(data.visible!.previous).to.equal(false);
+          expect(data.visible!.current).to.equal(true);
         });
         let t1 = datastore.get(schema1);
         id = datastore.beginTransaction();
-        t1.update({ 'my-record': { enabled: true } });
+        t1.update({ 'my-record': { visible: true } });
         datastore.endTransaction();
         expect(called).to.be.true;
       });
@@ -291,7 +296,7 @@ describe('@phosphor/datastore', () => {
 
       it('should throw an error for a nonexistent schema', () => {
         let schema3 = { ...schema2, id: 'new-schema' };
-        expect(() => { datastore.get(schema3); }).to.throw(/No table found/);
+        expect(() => { datastore.get(schema3 as any); }).to.throw(/No table found/);
       });
 
     });
@@ -371,7 +376,7 @@ describe('@phosphor/datastore', () => {
         datastore.endTransaction();
         let newDatastore = Datastore.create({
           id: DATASTORE_ID + 1,
-          schemas: [schema1, schema2]
+          schemas,
         });
         MessageLoop.sendMessage(
           newDatastore,
